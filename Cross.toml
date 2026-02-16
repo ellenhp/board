@@ -1,0 +1,14 @@
+# Copyright © SixtyFPS GmbH <info@slint.dev>
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+
+[target.armv7-unknown-linux-gnueabihf]
+image = "ghcr.io/slint-ui/slint/armv7-unknown-linux-gnueabihf"
+pre-build = ["apt-get update && apt-get install -y libc6-dev"]
+
+[build.env]
+passthrough = [
+    "SLINT_NO_QT",
+    "SLINT_STYLE",
+    "SLINT_TEST_FILTER",
+    "SLINT_INTERPRETER_ERROR_WHITELIST",
+]
