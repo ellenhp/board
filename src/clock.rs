@@ -5,13 +5,19 @@ use std::time::Duration;
 /// since the OBA clock offset provides a fallback.
 pub async fn run_clock_sync() {
     loop {
-        let _ = sync_once().await;
+        if let Err(err) = sync_once().await {
+            eprintln!("Error getting time from cloudflare: {:?}", err);
+        }
         tokio::time::sleep(Duration::from_secs(300)).await;
     }
 }
 
 async fn sync_once() -> Result<(), Box<dyn std::error::Error>> {
     let client = reqwest::Client::builder()
+        // This is fine because we're only using this client for HTTP requests
+        // anyway so a MITM attack could just drop TLS anyway. As it stands,
+        // the cert provided is rejected on the PM3 because of outdated roots.
+        .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(10))
         .build()?;
 

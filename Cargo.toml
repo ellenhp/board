@@ -9,7 +9,10 @@ default-run = "board"
 [features]
 default = ["windowed"]
 windowed = ["slint/backend-winit"]
+pm3 = ["framebuffer", "watchdog", "reminder"]
 framebuffer = ["dep:slint-backend-linuxfb"]
+watchdog = ["dep:subprocess"]
+reminder = ["dep:subprocess"]
 
 [dependencies]
 chrono = "0.4"
@@ -25,6 +28,8 @@ slint = { version = "1.14.1", default-features = false, features = [
 ] }
 slint-backend-linuxfb = { version = "0.1.1", optional = true }
 tokio = { version = "1.49.0", features = ["full"] }
+subprocess = { version = "1.0.0", optional = true }
+anyhow = "1.0.102"
 
 [profile.release]
 opt-level = "z"

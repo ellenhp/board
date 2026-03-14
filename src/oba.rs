@@ -48,6 +48,7 @@ struct ArrivalDeparture {
     route_id: String,
     #[serde(rename = "tripId")]
     trip_id: String,
+    predicted: Option<bool>,
 }
 
 fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
@@ -70,7 +71,8 @@ fn api_token() -> String {
 pub async fn fetch_arrivals(stop_id: &str) -> Result<(Vec<Arrival>, i64), reqwest::Error> {
     let url = format!(
         "https://api.pugetsound.onebusaway.org/api/where/arrivals-and-departures-for-stop/{}.json?key={}",
-        stop_id, api_token()
+        stop_id,
+        api_token()
     );
 
     let response: ApiResponse = reqwest::get(&url).await?.json().await?;
@@ -89,6 +91,7 @@ pub async fn fetch_arrivals(stop_id: &str) -> Result<(Vec<Arrival>, i64), reqwes
         .entry
         .arrivals_and_departures
         .into_iter()
+        .filter(|arrival| arrival.predicted == Some(true))
         .map(|arr| {
             let arrival_time = if arr.predicted_arrival_time > 0 {
                 arr.predicted_arrival_time

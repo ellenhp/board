@@ -2,10 +2,11 @@ use board::{Arrival, fetch_with_retry, format_time, recalculate_and_filter};
 use slint::{Model, VecModel};
 #[cfg(feature = "framebuffer")]
 use slint_backend_linuxfb::LinuxFbPlatformBuilder;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 slint::slint! {
 export struct ArrivalData {
@@ -60,16 +61,16 @@ export component MainUI inherits Window {
 
             // Route circle
             Rectangle {
-                width: 50px;
-                height: 50px;
+                width: 60px;
+                height: 60px;
                 border-radius: 25px;
                 background: arrival.route_color;
 
                 Text {
                     text: arrival.route_label;
                     font-size: 28pt;
-                    font-weight: 800;
-                    color: white;
+                    font-weight: 900;
+                    color: black;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -79,10 +80,11 @@ export component MainUI inherits Window {
             Text {
                 text: arrival.destination;
                 font-size: 40pt;
-                font-weight: 800;
+                font-weight: 600;
                 color: white;
                 vertical-alignment: center;
-                horizontal-stretch: 1;
+                overflow: clip;
+                width: 500px;
             }
 
             // Time
@@ -92,7 +94,8 @@ export component MainUI inherits Window {
                 font-weight: 800;
                 color: white;
                 vertical-alignment: center;
-                min-width: 100px;
+                horizontal-alignment: right;
+                width: 150px;
             }
         }
     }
@@ -102,8 +105,8 @@ export component MainUI inherits Window {
 struct State {
     main_ui: MainUI,
     stop_ids: Vec<String>,
-    cache: RefCell<HashMap<String, Vec<Arrival>>>,
-    raw_arrivals: RefCell<Vec<Arrival>>,
+    cache: Mutex<HashMap<String, Vec<Arrival>>>,
+    raw_arrivals: Mutex<Vec<Arrival>>,
     clock_offset_ms: Cell<i64>,
     arrivals_model: Rc<VecModel<ArrivalData>>,
 }
@@ -115,23 +118,27 @@ async fn fetch_arrivals(state: &State) {
         match fetch_with_retry(stop_id).await {
             Ok((arrivals, clock_offset)) => {
                 state.clock_offset_ms.set(clock_offset);
-                state.cache.borrow_mut().insert(stop_id.clone(), arrivals.clone());
+                state
+                    .cache
+                    .lock()
+                    .await
+                    .insert(stop_id.clone(), arrivals.clone());
                 all_arrivals.extend(arrivals);
             }
             Err(_) => {
-                if let Some(cached) = state.cache.borrow().get(stop_id) {
+                if let Some(cached) = state.cache.lock().await.get(stop_id) {
                     all_arrivals.extend(cached.clone());
                 }
             }
         }
     }
 
-    *state.raw_arrivals.borrow_mut() = all_arrivals;
-    refresh_display(state);
+    *state.raw_arrivals.lock().await = all_arrivals;
+    refresh_display(state).await;
 }
 
-fn refresh_display(state: &State) {
-    let mut arrivals = state.raw_arrivals.borrow().clone();
+async fn refresh_display(state: &State) {
+    let mut arrivals = state.raw_arrivals.lock().await.clone();
     recalculate_and_filter(&mut arrivals, state.clock_offset_ms.get());
 
     let model = &state.arrivals_model;
@@ -183,8 +190,8 @@ fn main() {
     let state = Rc::new(State {
         main_ui,
         stop_ids,
-        cache: RefCell::new(HashMap::new()),
-        raw_arrivals: RefCell::new(Vec::new()),
+        cache: Mutex::new(HashMap::new()),
+        raw_arrivals: Mutex::new(Vec::new()),
         clock_offset_ms: Cell::new(0),
         arrivals_model,
     });
@@ -197,10 +204,43 @@ fn main() {
         slint::spawn_local(async move {
             let mut tick = 0u32;
             loop {
+                #[cfg(feature = "watchdog")]
+                {
+                    use subprocess::Exec;
+                    tokio::spawn(async {
+                        let _ = Exec::cmd("/usr/bin/NxExe")
+                            .arg("watchdog")
+                            .arg("10")
+                            .start();
+                    });
+                }
+
                 let now = chrono::Local::now();
-                state.main_ui.set_current_time(now.format("%H:%M:%S").to_string().into());
+                state
+                    .main_ui
+                    .set_current_time(now.format("%H:%M:%S").to_string().into());
                 if tick % 10 == 0 {
-                    refresh_display(&state);
+                    refresh_display(&state).await;
+                    #[cfg(feature = "reminder")]
+                    for arrival in state.raw_arrivals.lock().await.clone() {
+                        use std::time::{SystemTime, UNIX_EPOCH};
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("duration since epoch failed")
+                            .as_millis() as i64;
+                        let req_path = format!("{}.req", arrival.route_label);
+                        if std::fs::exists(&req_path).unwrap()
+                            && arrival.arrival_time_ms > now + 300_000
+                            && arrival.arrival_time_ms < now + 420_000
+                        {
+                            std::fs::remove_file(&req_path).unwrap();
+                            use subprocess::Exec;
+                            let filename = format!("{}.wav", &arrival.route_label);
+                            tokio::spawn(async {
+                                let _ = Exec::cmd("aplay").arg(filename).start();
+                            });
+                        }
+                    }
                 }
                 tick = tick.wrapping_add(1);
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -208,6 +248,9 @@ fn main() {
         })
         .unwrap();
     }
+
+    #[cfg(feature = "reminder")]
+    slint::spawn_local(board::listener::listen_udp()).unwrap();
 
     // Sync system clock from HTTP every 5 minutes
     slint::spawn_local(board::clock::run_clock_sync()).unwrap();
